@@ -1,5 +1,7 @@
 # FFmpeg Exporter
 
+[![CI](https://github.com/yourusername/ffmpeg_exporter/actions/workflows/ci.yml/badge.svg)](https://github.com/yourusername/ffmpeg_exporter/actions/workflows/ci.yml)
+
 A Prometheus exporter for FFmpeg streams that exposes detailed metrics about media streams. It supports various stream types including SRT, HLS, RTMP, RTSP, and more.
 
 ## Features
@@ -228,6 +230,40 @@ rate(ffmpeg_frames{type="processed"}[1m])
 
 # Error rate by frame type
 rate(ffmpeg_decoding_errors_total[5m])
+```
+
+## Development
+
+### CI/CD Pipeline
+
+The project uses GitHub Actions for continuous integration and deployment:
+
+- **Automated Testing**: All PRs and pushes to main branch are automatically tested
+- **Code Quality**: Includes rustfmt and clippy checks
+- **Docker Images**: Automatically builds and publishes Docker images to GitHub Container Registry
+- **Releases**: Creates GitHub releases when tags are pushed
+
+The pipeline includes:
+
+1. Code formatting check (rustfmt)
+2. Linting (clippy)
+3. Running tests
+4. Building the project
+5. Building and publishing Docker images (on main branch)
+6. Creating releases (when tags are pushed)
+
+### Container Registry
+
+Docker images are automatically published to GitHub Container Registry. You can pull them using:
+
+```bash
+docker pull ghcr.io/yourusername/ffmpeg_exporter:latest
+```
+
+Or use a specific version:
+
+```bash
+docker pull ghcr.io/yourusername/ffmpeg_exporter:v1.0.0
 ```
 
 ## Contributing
