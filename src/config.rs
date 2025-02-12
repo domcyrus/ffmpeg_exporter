@@ -3,6 +3,26 @@ use clap::Parser;
 use std::path::Path;
 use url::Url;
 
+#[derive(Parser, Debug, Clone)]
+#[command(author, version, about, long_about = None)]
+pub struct Args {
+    /// Input stream URL/path to monitor
+    #[arg(short, long)]
+    pub input: String,
+
+    /// Output file path (optional)
+    #[arg(short, long, default_value = "output.ts")]
+    pub output: String,
+
+    /// Metrics port to expose Prometheus metrics
+    #[arg(short, long, default_value = "9090")]
+    pub metrics_port: u16,
+
+    /// ffmpeg cli path (optional)
+    #[arg(short, long, default_value = "ffmpeg")]
+    pub ffmpeg_path: String,
+}
+
 #[derive(Debug, Clone)]
 pub enum StreamType {
     SRT(String),
@@ -95,20 +115,4 @@ impl StreamType {
             StreamType::File(path) => vec!["-i".to_string(), path.clone()],
         }
     }
-}
-
-#[derive(Parser, Debug, Clone)]
-#[command(author, version, about, long_about = None)]
-pub struct Args {
-    /// Input stream URL/path to monitor
-    #[arg(short, long)]
-    pub input: String,
-
-    /// Output file path (optional)
-    #[arg(short, long, default_value = "output.ts")]
-    pub output: String,
-
-    /// Metrics port to expose Prometheus metrics
-    #[arg(short, long, default_value = "9090")]
-    pub metrics_port: u16,
 }

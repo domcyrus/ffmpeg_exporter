@@ -31,11 +31,12 @@ impl StreamPatterns {
 pub struct FFmpegMonitor {
     output: String,
     stream_type: StreamType,
+    ffmpeg_path: String,
     running: Arc<AtomicBool>,
 }
 
 impl FFmpegMonitor {
-    pub fn new(input: String, output: String) -> Result<Self> {
+    pub fn new(input: String, output: String, ffmpeg_path: String) -> Result<Self> {
         let stream_type = StreamType::from_input(&input)
             .with_context(|| format!("Failed to determine stream type for input: {}", input))?;
         // remove the output file if it exists
@@ -43,9 +44,18 @@ impl FFmpegMonitor {
             std::fs::remove_file(&output).context("Failed to remove existing output file")?;
         }
 
+        // check if the ffmpeg binary exists
+        if ffmpeg_path != "ffmpeg" && !std::path::Path::new(&ffmpeg_path).exists() {
+            return Err(anyhow::anyhow!(
+                "ffmpeg binary not found at path: {}",
+                ffmpeg_path
+            ));
+        }
+
         Ok(Self {
             output,
             stream_type,
+            ffmpeg_path,
             running: Arc::new(AtomicBool::new(true)),
         })
     }
@@ -55,7 +65,7 @@ impl FFmpegMonitor {
     }
 
     fn build_ffmpeg_command(&self) -> Command {
-        let mut ffmpeg = Command::new("ffmpeg");
+        let mut ffmpeg = Command::new(&self.ffmpeg_path);
 
         let input_args = self.stream_type.get_ffmpeg_input_args();
         for arg in input_args {

@@ -22,3 +22,6 @@ Cargo.lock
 
 # ignore test data in data dir
 data/
+
+# ignore the output.ts file
+output.ts

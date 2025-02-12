@@ -32,7 +32,7 @@ async fn main() -> Result<()> {
     };
 
     // Create the FFmpeg monitor
-    let monitor = FFmpegMonitor::new(args.input, args.output)
+    let monitor = FFmpegMonitor::new(args.input, args.output, args.ffmpeg_path)
         .context("Failed to initialize FFmpeg monitor")?;
 
     // Set up Ctrl+C handler
