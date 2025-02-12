@@ -4,19 +4,24 @@ set -e  # Exit on error
 # Configuration
 TEMP_FILE="/tmp/10sec.mp4"
 SRT_PORT=9999
+RTP_PORT=5004
+MPEGTS_PORT=5005
+UDP_PORT=5006
 HLS_DIR="/tmp/streaming"
 HLS_SEGMENT_TIME=4
+DEFAULT_ADDRESS="127.0.0.1"
 
 # Function to show usage
 show_usage() {
-    echo "Usage: $0 --input FILE [--hls] [--port PORT]"
+    echo "Usage: $0 --input FILE [--protocol PROTOCOL] [--port PORT] [--address ADDRESS]"
     echo
     echo "Required:"
-    echo "  --input FILE    Input video file to stream"
+    echo "  --input FILE       Input video file to stream"
     echo
     echo "Optional:"
-    echo "  --hls          Start HLS stream instead of SRT"
-    echo "  --port PORT    Set SRT port (default: 9999)"
+    echo "  --protocol PROTO   Streaming protocol (srt/hls/rtp/mpegts/udp) (default: srt)"
+    echo "  --port PORT        Set streaming port (default varies by protocol)"
+    echo "  --address ADDRESS  Set destination address (default: 127.0.0.1)"
     exit 1
 }
 
@@ -43,6 +48,30 @@ start_srt_stream() {
         -f mpegts "srt://0.0.0.0:${SRT_PORT}?mode=listener"
 }
 
+# Function to start RTP stream
+start_rtp_stream() {
+    echo "Starting RTP stream to ${DEST_ADDRESS}:${RTP_PORT}..."
+    ffmpeg -stream_loop -1 -re -i "${TEMP_FILE}" \
+        -c copy \
+        -f rtp "rtp://${DEST_ADDRESS}:${RTP_PORT}"
+}
+
+# Function to start MPEG-TS stream
+start_mpegts_stream() {
+    echo "Starting MPEG-TS stream to ${DEST_ADDRESS}:${MPEGTS_PORT}..."
+    ffmpeg -stream_loop -1 -re -i "${TEMP_FILE}" \
+        -c copy \
+        -f mpegts "tcp://${DEST_ADDRESS}:${MPEGTS_PORT}?listen=1"
+}
+
+# Function to start UDP stream
+start_udp_stream() {
+    echo "Starting UDP stream to ${DEST_ADDRESS}:${UDP_PORT}..."
+    ffmpeg -stream_loop -1 -re -i "${TEMP_FILE}" \
+        -c copy \
+        -f mpegts "udp://${DEST_ADDRESS}:${UDP_PORT}"
+}
+
 # Function to start HLS stream
 start_hls_stream() {
     echo "Starting HLS stream in ${HLS_DIR}..."
@@ -64,15 +93,25 @@ check_ffmpeg
 # Process command line arguments
 STREAM_TYPE="srt"
 INPUT_FILE=""
+DEST_ADDRESS="${DEFAULT_ADDRESS}"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --hls)
-            STREAM_TYPE="hls"
-            shift
+        --protocol)
+            STREAM_TYPE="$2"
+            shift 2
             ;;
         --port)
-            SRT_PORT="$2"
+            case "${STREAM_TYPE}" in
+                "srt") SRT_PORT="$2" ;;
+                "rtp") RTP_PORT="$2" ;;
+                "mpegts") MPEGTS_PORT="$2" ;;
+                "udp") UDP_PORT="$2" ;;
+            esac
+            shift 2
+            ;;
+        --address)
+            DEST_ADDRESS="$2"
             shift 2
             ;;
         --input)
@@ -106,7 +145,20 @@ case "${STREAM_TYPE}" in
     "srt")
         start_srt_stream
         ;;
+    "rtp")
+        start_rtp_stream
+        ;;
+    "mpegts")
+        start_mpegts_stream
+        ;;
+    "udp")
+        start_udp_stream
+        ;;
     "hls")
         start_hls_stream
+        ;;
+    *)
+        echo "Error: Unknown streaming protocol '${STREAM_TYPE}'"
+        show_usage
         ;;
 esac
