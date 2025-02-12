@@ -10,6 +10,7 @@ A Prometheus exporter for FFmpeg streams that exposes detailed metrics about med
 - Support for multiple stream protocols
 - Detailed stream health metrics
 - Connection state monitoring
+- Structured logging with configurable levels
 
 ## Installation
 
@@ -48,7 +49,7 @@ apt-get update && apt-get install -y ffmpeg pkg-config
 brew install ffmpeg
 ```
 
-##### Building from Source
+#### Building from Source
 
 ```bash
 # Clone the repository
@@ -63,15 +64,6 @@ cargo install --path .
 ```
 
 The built binary will be in `target/release/ffmpeg_exporter`
-
-## Test Scripts
-
-The scripts/ directory contains helper scripts for testing:
-
-- Test stream generation from video files (SRT/HLS)
-- Network condition simulation for macOS (packet loss, latency)
-
-See scripts/README.md for detailed documentation of these testing tools.
 
 ## Usage
 
@@ -92,6 +84,9 @@ ffmpeg_exporter --input https://example.com/stream.m3u8
 
 # Monitor with custom output and metrics port
 ffmpeg_exporter --input rtmp://server/live/stream --output output.ts --metrics-port 8080
+
+# Run with debug logging
+RUST_LOG=debug ffmpeg_exporter --input srt://server:9999
 ```
 
 ### Supported Stream Types
@@ -105,6 +100,43 @@ The tool automatically detects the stream type from the input URL:
 - MPEGTS (.ts)
 - UDP (udp://)
 - RDP (rdp:// or :3389)
+
+## Logging
+
+The exporter uses structured logging via the `tracing` crate. All logs are written to stdout/stderr, following cloud-native best practices.
+
+### Log Levels
+
+- ERROR: Critical issues requiring immediate attention
+- WARN: Concerning but non-fatal issues (corrupt packets, temporary failures)
+- INFO: Important state changes and operational events
+- DEBUG: Detailed information useful for troubleshooting
+- TRACE: Very detailed protocol-level information
+
+### Configuring Log Level
+
+The log level can be controlled via the `RUST_LOG` environment variable:
+
+```bash
+# Set global log level
+RUST_LOG=debug ffmpeg_exporter --input srt://server:9999
+
+# Set different levels for different modules
+RUST_LOG=info,ffmpeg_monitor=debug ffmpeg_exporter --input srt://server:9999
+
+# Examples of component-specific logging
+RUST_LOG=ffmpeg_monitor=trace,tower_http=debug ffmpeg_exporter --input srt://server:9999
+```
+
+### Example Log Output
+
+```
+2024-02-12T15:23:45.123Z INFO  ffmpeg_monitor Starting FFmpeg monitor
+2024-02-12T15:23:45.124Z DEBUG ffmpeg_monitor Parsed arguments: Args { input: "srt://server:9999", output: "output.ts", metrics_port: 9090 }
+2024-02-12T15:23:45.125Z INFO  ffmpeg_monitor Initiating new FFmpeg process
+2024-02-12T15:23:46.127Z WARN  ffmpeg_monitor Corrupt packet detected in stream
+2024-02-12T15:23:47.130Z ERROR ffmpeg_monitor FFmpeg process failed: connection refused
+```
 
 ## Metrics
 
@@ -198,28 +230,9 @@ rate(ffmpeg_frames{type="processed"}[1m])
 rate(ffmpeg_decoding_errors_total[5m])
 ```
 
-## Building from Source
+## Contributing
 
-Requirements:
-
-- Rust 1.70 or higher
-- FFmpeg 4.4 or higher
-- Standard build tools (gcc, make, etc.)
-
-```bash
-# Clone the repository
-git clone https://github.com/yourusername/stream_mon.git
-
-# Build
-cd stream_mon
-cargo build --release
-
-# Run tests
-cargo test
-
-# Install
-cargo install --path .
-```
+Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 

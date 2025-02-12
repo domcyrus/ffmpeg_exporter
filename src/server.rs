@@ -3,6 +3,7 @@ use axum::{extract::State, routing::get, Router};
 use prometheus::{Encoder, TextEncoder};
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
+use tracing::info;
 
 async fn metrics_handler(State(state): State<AppState>) -> String {
     let encoder = TextEncoder::new();
@@ -22,8 +23,8 @@ pub async fn run_server(
         .with_state(state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    println!("Metrics server listening on http://{}/metrics", addr);
 
+    info!("Metrics server listening on http://{}", addr);
     let listener = TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
 

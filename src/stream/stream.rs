@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
+use tracing::{debug, error, info, instrument, trace, warn};
 
 #[derive(Clone)]
 pub struct StreamPatterns {
@@ -82,18 +83,22 @@ impl FFmpegMonitor {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
+        debug!("FFmpeg command: {:?}", ffmpeg);
         ffmpeg
     }
 
+    #[instrument(skip(self, stdout_metrics, stderr_metrics, connection_metrics))]
     pub fn run(
         &self,
         stdout_metrics: StdoutMetrics,
         stderr_metrics: StderrMetrics,
         connection_metrics: ConnectionMetrics,
     ) -> Result<()> {
+        info!("Starting FFmpeg monitoring");
         const RETRY_DELAY: Duration = Duration::from_secs(10);
 
         while self.running.load(Ordering::SeqCst) {
+            info!("Initiating new FFmpeg process");
             let start_time = Instant::now();
             connection_metrics.connection_state.set(1.0); // Connected
 
@@ -104,19 +109,20 @@ impl FFmpegMonitor {
                 start_time,
             ) {
                 Ok(()) => {
-                    // Clean exit (e.g., from Ctrl+C)
                     connection_metrics.connection_state.set(0.0);
                     break;
                 }
                 Err(e) => {
-                    eprintln!("FFmpeg process failed: {:#}", e);
+                    error!(?e, "FFmpeg process failed");
                     connection_metrics.connection_state.set(0.0);
                     connection_metrics.reconnect_attempts.inc();
                     connection_metrics.record_error("connection_failed");
 
                     // Wait before retrying, but check running flag periodically
+                    warn!("Waiting before retry attempt");
                     for _ in 0..100 {
                         if !self.running.load(Ordering::SeqCst) {
+                            info!("Shutdown requested during retry wait");
                             return Ok(());
                         }
                         thread::sleep(RETRY_DELAY / 100);
@@ -128,6 +134,7 @@ impl FFmpegMonitor {
         Ok(())
     }
 
+    #[instrument(skip(self, stdout_metrics, stderr_metrics, connection_metrics))]
     fn start_single_process(
         &self,
         stdout_metrics: StdoutMetrics,
@@ -135,11 +142,13 @@ impl FFmpegMonitor {
         connection_metrics: ConnectionMetrics,
         start_time: Instant,
     ) -> Result<()> {
+        debug!("Building FFmpeg command");
         let mut ffmpeg = self
             .build_ffmpeg_command()
             .spawn()
             .context("Failed to spawn ffmpeg process")?;
 
+        info!("FFmpeg process spawned successfully");
         let stdout = ffmpeg.stdout.take().context("Failed to capture stdout")?;
         let stderr = ffmpeg.stderr.take().context("Failed to capture stderr")?;
 
@@ -160,7 +169,7 @@ impl FFmpegMonitor {
             if let Err(e) =
                 Self::process_stdout(stdout_reader, patterns_clone, stdout_metrics_clone)
             {
-                eprintln!("Error processing stdout: {:#}", e);
+                error!(?e, "Error processing stdout");
                 let _ = error_tx_clone.send(e);
                 running.store(false, Ordering::SeqCst);
             }
@@ -171,7 +180,7 @@ impl FFmpegMonitor {
         let running_clone = self.running.clone();
         thread::spawn(move || {
             if let Err(e) = Self::process_stderr(stderr_reader, stderr_metrics) {
-                eprintln!("Error processing stderr: {:#}", e);
+                error!(?e, "Error processing stderr");
                 let _ = error_tx_clone.send(e);
                 running_clone.store(false, Ordering::SeqCst);
             }
@@ -236,13 +245,16 @@ impl FFmpegMonitor {
         Ok(())
     }
 
+    #[instrument(skip(reader, patterns, metrics))]
     fn process_stdout(
         reader: impl BufRead,
         patterns: StreamPatterns,
         metrics: StdoutMetrics,
     ) -> Result<()> {
+        debug!("Starting stdout processing");
         for line in reader.lines() {
             let line = line.context("Failed to read stdout line")?;
+            debug!(?line, "Processing stdout line");
 
             if let Some(captures) = patterns.fps.captures(&line) {
                 let fps = captures[1]
@@ -272,17 +284,20 @@ impl FFmpegMonitor {
         Ok(())
     }
 
+    #[instrument(skip(reader, metrics))]
     fn process_stderr(reader: impl BufRead, metrics: StderrMetrics) -> Result<()> {
+        debug!("Starting stderr processing");
         let frame_error_regex = Regex::new(r"concealing.*in (I|P|B) frame")
             .context("Failed to compile frame error regex")?;
 
         for line in reader.lines() {
             let line = line.context("Failed to read stderr line")?;
-
-            // Log all stderr output for debugging
-            eprintln!("FFmpeg stderr: {}", line);
+            if !line.contains("error") && !line.contains("corrupt") {
+                trace!(?line, "FFmpeg stderr output");
+            }
 
             if let Some(stream_id) = line.find("corrupt packet") {
+                warn!(?line, "Corrupt packet detected in stream");
                 metrics
                     .packet_corrupt
                     .with_label_values(&[&stream_id.to_string()])
@@ -290,6 +305,7 @@ impl FFmpegMonitor {
             }
 
             if line.contains("error while decoding") {
+                error!(?line, "Decoding error detected");
                 metrics
                     .decoding_errors
                     .with_label_values(&["general"])
@@ -297,6 +313,7 @@ impl FFmpegMonitor {
             }
 
             if let Some(captures) = frame_error_regex.captures(&line) {
+                error!(?line, "Decoding error detected");
                 let frame_type = captures.get(1).map_or("unknown", |m| m.as_str());
                 metrics
                     .decoding_errors

@@ -1,5 +1,6 @@
 use prometheus::{Counter, CounterVec, Gauge, GaugeVec, Opts, Registry};
 use std::sync::Arc;
+use tracing::{debug, error, info};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -8,6 +9,7 @@ pub struct AppState {
 
 impl AppState {
     pub fn new() -> (Self, Registry) {
+        debug!("Created new prometheus registry");
         let registry = Registry::new();
         let state = Self {
             registry: Arc::new(registry.clone()),
@@ -26,6 +28,8 @@ pub struct StdoutMetrics {
 
 impl StdoutMetrics {
     pub fn new(registry: &Registry) -> Result<Self, prometheus::Error> {
+        debug!("Initializing stdout metrics");
+
         let fps_gauge = Gauge::new("ffmpeg_fps", "Current frames per second")?;
         let frame_counter = GaugeVec::new(
             Opts::new("ffmpeg_frames", "Number of frames processed by type"),
@@ -60,6 +64,7 @@ pub struct StderrMetrics {
 
 impl StderrMetrics {
     pub fn new(registry: &Registry) -> Result<Self, prometheus::Error> {
+        debug!("Initializing stderr metrics");
         let packet_corrupt = CounterVec::new(
             Opts::new(
                 "ffmpeg_packet_corrupt_total",
@@ -97,6 +102,8 @@ pub struct ConnectionMetrics {
 
 impl ConnectionMetrics {
     pub fn new(registry: &Registry) -> Result<Self, prometheus::Error> {
+        debug!("Initializing connection metrics");
+
         let reconnect_attempts = Counter::new(
             "ffmpeg_stream_reconnect_attempts_total",
             "Total number of stream reconnection attempts",
@@ -126,6 +133,8 @@ impl ConnectionMetrics {
         registry.register(Box::new(current_uptime.clone()))?;
         registry.register(Box::new(last_error.clone()))?;
 
+        info!("Connection metrics initialized successfully");
+
         Ok(Self {
             reconnect_attempts,
             connection_state,
@@ -135,6 +144,7 @@ impl ConnectionMetrics {
     }
 
     pub fn record_error(&self, error_type: &str) {
+        error!(error_type, "Stream error occurred");
         self.last_error.with_label_values(&[error_type]).set(
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
