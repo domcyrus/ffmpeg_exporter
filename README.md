@@ -1,6 +1,6 @@
 # FFmpeg Exporter
 
-[![CI](https://github.com/domcyrus/ffmpeg_exporter/actions/workflows/ci.yml/badge.svg)](https://github.com/domcyrus/ffmpeg_exporter/actions/workflows/ci.yml)
+[![CI](https://github.com/domcyrus/ffmpeg_exporter/actions/workflows/ci.yaml/badge.svg)](https://github.com/domcyrus/ffmpeg_exporter/actions/workflows/ci.yaml)
 
 A Prometheus exporter for FFmpeg streams that exposes detailed metrics about media streams. It supports various stream types including SRT, HLS, RTMP, RTSP, and more.
 
