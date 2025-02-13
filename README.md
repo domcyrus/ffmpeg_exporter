@@ -1,6 +1,6 @@
 # FFmpeg Exporter
 
-[![CI](https://github.com/yourusername/ffmpeg_exporter/actions/workflows/ci.yml/badge.svg)](https://github.com/yourusername/ffmpeg_exporter/actions/workflows/ci.yml)
+[![CI](https://github.com/domcyrus/ffmpeg_exporter/actions/workflows/ci.yml/badge.svg)](https://github.com/domcyrus/ffmpeg_exporter/actions/workflows/ci.yml)
 
 A Prometheus exporter for FFmpeg streams that exposes detailed metrics about media streams. It supports various stream types including SRT, HLS, RTMP, RTSP, and more.
 
@@ -55,7 +55,7 @@ brew install ffmpeg
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/ffmpeg_exporter.git
+git clone https://github.com/domcyrus/ffmpeg_exporter.git
 
 # Build
 cd ffmpeg_exporter
@@ -257,13 +257,13 @@ The pipeline includes:
 Docker images are automatically published to GitHub Container Registry. You can pull them using:
 
 ```bash
-docker pull ghcr.io/yourusername/ffmpeg_exporter:latest
+docker pull ghcr.io/domcyrus/ffmpeg_exporter:latest
 ```
 
 Or use a specific version:
 
 ```bash
-docker pull ghcr.io/yourusername/ffmpeg_exporter:v1.0.0
+docker pull ghcr.io/domcyrus/ffmpeg_exporter:v1.0.0
 ```
 
 ## Contributing
