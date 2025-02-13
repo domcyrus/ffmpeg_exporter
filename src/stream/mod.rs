@@ -1,3 +1,4 @@
-pub mod stream;
+mod monitor;
+mod patterns;
 
-pub use stream::FFmpegMonitor;
+pub use monitor::FFmpegMonitor;

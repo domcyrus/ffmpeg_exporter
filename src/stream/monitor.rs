@@ -1,3 +1,4 @@
+use super::patterns::StreamPatterns;
 use crate::config::StreamType;
 use crate::metrics::{ConnectionMetrics, StderrMetrics, StdoutMetrics};
 use anyhow::{Context, Result};
@@ -9,25 +10,6 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 use tracing::{debug, error, info, instrument, trace, warn};
-
-#[derive(Clone)]
-pub struct StreamPatterns {
-    pub fps: Regex,
-    pub frame: Regex,
-    pub speed: Regex,
-    pub bitrate: Regex,
-}
-
-impl StreamPatterns {
-    pub fn new() -> Self {
-        Self {
-            fps: Regex::new(r"fps=\s*(\d+\.?\d*)").unwrap(),
-            frame: Regex::new(r"frame=\s*(\d+)").unwrap(),
-            speed: Regex::new(r"speed=\s*(\d+\.?\d*)x").unwrap(),
-            bitrate: Regex::new(r"bitrate=\s*(\d+\.?\d*)kbits/s").unwrap(),
-        }
-    }
-}
 
 pub struct FFmpegMonitor {
     output: String,

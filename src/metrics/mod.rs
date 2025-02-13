@@ -1,4 +1,5 @@
-// src/metrics/mod.rs
-pub mod metrics;
+mod app_state;
+mod collectors;
 
-pub use metrics::{AppState, ConnectionMetrics, StderrMetrics, StdoutMetrics};
+pub use app_state::AppState;
+pub use collectors::{ConnectionMetrics, StderrMetrics, StdoutMetrics};

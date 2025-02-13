@@ -1,22 +1,6 @@
 use prometheus::{Counter, CounterVec, Gauge, GaugeVec, Opts, Registry};
-use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, info};
-
-#[derive(Clone)]
-pub struct AppState {
-    pub registry: Arc<Registry>,
-}
-
-impl AppState {
-    pub fn new() -> (Self, Registry) {
-        debug!("Created new prometheus registry");
-        let registry = Registry::new();
-        let state = Self {
-            registry: Arc::new(registry.clone()),
-        };
-        (state, registry)
-    }
-}
 
 #[derive(Clone)]
 pub struct StdoutMetrics {
@@ -146,8 +130,8 @@ impl ConnectionMetrics {
     pub fn record_error(&self, error_type: &str) {
         error!(error_type, "Stream error occurred");
         self.last_error.with_label_values(&[error_type]).set(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs() as f64,
         );

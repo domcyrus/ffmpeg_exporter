@@ -25,13 +25,13 @@ pub struct Args {
 
 #[derive(Debug, Clone)]
 pub enum StreamType {
-    SRT(String),
-    HLS(String),
-    RDP(String),
-    MPEGTS(String),
-    RTMP(String),
-    RTSP(String),
-    UDP(String),
+    Srt(String),
+    Hls(String),
+    Rdp(String),
+    MpegTs(String),
+    Rtmp(String),
+    Rtsp(String),
+    Udp(String),
     File(String),
 }
 
@@ -40,17 +40,17 @@ impl StreamType {
         // Try to parse as URL first
         if let Ok(url) = Url::parse(input) {
             return match url.scheme() {
-                "srt" => Ok(StreamType::SRT(input.to_string())),
-                "rtmp" => Ok(StreamType::RTMP(input.to_string())),
-                "rtsp" => Ok(StreamType::RTSP(input.to_string())),
-                "udp" => Ok(StreamType::UDP(input.to_string())),
+                "srt" => Ok(StreamType::Srt(input.to_string())),
+                "rtmp" => Ok(StreamType::Rtmp(input.to_string())),
+                "rtsp" => Ok(StreamType::Rtsp(input.to_string())),
+                "udp" => Ok(StreamType::Udp(input.to_string())),
                 "http" | "https" => {
                     if input.ends_with(".m3u8") || input.ends_with(".m3u") {
-                        Ok(StreamType::HLS(input.to_string()))
+                        Ok(StreamType::Hls(input.to_string()))
                     } else if input.ends_with(".ts") {
-                        Ok(StreamType::MPEGTS(input.to_string()))
+                        Ok(StreamType::MpegTs(input.to_string()))
                     } else {
-                        Ok(StreamType::HLS(input.to_string()))
+                        Ok(StreamType::Hls(input.to_string()))
                     }
                 }
                 scheme => anyhow::bail!("Unsupported URL scheme: {}", scheme),
@@ -59,15 +59,15 @@ impl StreamType {
 
         // Check if it's an RDP connection string
         if input.starts_with("rdp://") || input.contains(":3389") {
-            return Ok(StreamType::RDP(input.to_string()));
+            return Ok(StreamType::Rdp(input.to_string()));
         }
 
         // Check if it's a file path
         let path = Path::new(input);
         if path.exists() {
             return match path.extension().and_then(|ext| ext.to_str()) {
-                Some("ts") => Ok(StreamType::MPEGTS(input.to_string())),
-                Some("m3u8") | Some("m3u") => Ok(StreamType::HLS(input.to_string())),
+                Some("ts") => Ok(StreamType::MpegTs(input.to_string())),
+                Some("m3u8") | Some("m3u") => Ok(StreamType::Hls(input.to_string())),
                 Some(_) => Ok(StreamType::File(input.to_string())),
                 None => anyhow::bail!("Unable to determine file type"),
             };
@@ -78,20 +78,20 @@ impl StreamType {
 
     pub fn get_ffmpeg_input_args(&self) -> Vec<String> {
         match self {
-            StreamType::SRT(url) => vec!["-i".to_string(), url.clone()],
-            StreamType::HLS(url) => vec![
+            StreamType::Srt(url) => vec!["-i".to_string(), url.clone()],
+            StreamType::Hls(url) => vec![
                 "-i".to_string(),
                 url.clone(),
                 "-live_start_index".to_string(),
                 "-1".to_string(),
             ],
-            StreamType::RDP(conn) => vec![
+            StreamType::Rdp(conn) => vec![
                 "-f".to_string(),
                 "gdigrab".to_string(),
                 "-i".to_string(),
                 conn.clone(),
             ],
-            StreamType::MPEGTS(url) => vec![
+            StreamType::MpegTs(url) => vec![
                 "-i".to_string(),
                 url.clone(),
                 "-analyzeduration".to_string(),
@@ -99,14 +99,14 @@ impl StreamType {
                 "-probesize".to_string(),
                 "1000000".to_string(),
             ],
-            StreamType::RTMP(url) => vec!["-i".to_string(), url.clone()],
-            StreamType::RTSP(url) => vec![
+            StreamType::Rtmp(url) => vec!["-i".to_string(), url.clone()],
+            StreamType::Rtsp(url) => vec![
                 "-rtsp_transport".to_string(),
                 "tcp".to_string(),
                 "-i".to_string(),
                 url.clone(),
             ],
-            StreamType::UDP(url) => vec![
+            StreamType::Udp(url) => vec![
                 "-i".to_string(),
                 url.clone(),
                 "-timeout".to_string(),
