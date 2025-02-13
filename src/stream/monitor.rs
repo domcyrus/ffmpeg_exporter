@@ -4,6 +4,7 @@ use crate::metrics::{ConnectionMetrics, StderrMetrics, StdoutMetrics};
 use anyhow::{Context, Result};
 use regex::Regex;
 use std::io::{self, BufRead};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -11,10 +12,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tracing::{debug, error, info, instrument, trace, warn};
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 pub struct FFmpegMonitor {
-    output: String,
+    output: PathBuf,
     stream_type: StreamType,
-    ffmpeg_path: String,
+    ffmpeg_path: PathBuf,
     running: Arc<AtomicBool>,
 }
 
@@ -22,13 +26,16 @@ impl FFmpegMonitor {
     pub fn new(input: String, output: String, ffmpeg_path: String) -> Result<Self> {
         let stream_type = StreamType::from_input(&input)
             .with_context(|| format!("Failed to determine stream type for input: {}", input))?;
+
+        let output_path = PathBuf::from(output);
         // remove the output file if it exists
-        if std::path::Path::new(&output).exists() {
-            std::fs::remove_file(&output).context("Failed to remove existing output file")?;
+        if output_path.exists() {
+            std::fs::remove_file(&output_path).context("Failed to remove existing output file")?;
         }
 
+        let ffmpeg_executable = PathBuf::from(&ffmpeg_path);
         // check if the ffmpeg binary exists
-        if ffmpeg_path != "ffmpeg" && !std::path::Path::new(&ffmpeg_path).exists() {
+        if ffmpeg_path != "ffmpeg" && ffmpeg_path != "ffmpeg.exe" && !ffmpeg_executable.exists() {
             return Err(anyhow::anyhow!(
                 "ffmpeg binary not found at path: {}",
                 ffmpeg_path
@@ -36,9 +43,9 @@ impl FFmpegMonitor {
         }
 
         Ok(Self {
-            output,
+            output: output_path,
             stream_type,
-            ffmpeg_path,
+            ffmpeg_path: ffmpeg_executable,
             running: Arc::new(AtomicBool::new(true)),
         })
     }
@@ -49,6 +56,12 @@ impl FFmpegMonitor {
 
     fn build_ffmpeg_command(&self) -> Command {
         let mut ffmpeg = Command::new(&self.ffmpeg_path);
+
+        #[cfg(windows)]
+        {
+            // Prevent opening a console window on Windows
+            ffmpeg.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
 
         let input_args = self.stream_type.get_ffmpeg_input_args();
         for arg in input_args {
@@ -78,6 +91,8 @@ impl FFmpegMonitor {
     ) -> Result<()> {
         info!("Starting FFmpeg monitoring");
         const RETRY_DELAY: Duration = Duration::from_secs(10);
+        const MAX_RETRIES: u32 = 5; // Maximum number of retry attempts
+        let mut retry_count = 0;
 
         while self.running.load(Ordering::SeqCst) {
             info!("Initiating new FFmpeg process");
@@ -100,8 +115,17 @@ impl FFmpegMonitor {
                     connection_metrics.reconnect_attempts.inc();
                     connection_metrics.record_error("connection_failed");
 
+                    retry_count += 1;
+                    if retry_count >= MAX_RETRIES {
+                        error!("Maximum retry attempts reached");
+                        return Err(anyhow::anyhow!("Maximum retry attempts reached"));
+                    }
+
                     // Wait before retrying, but check running flag periodically
-                    warn!("Waiting before retry attempt");
+                    warn!(
+                        "Waiting before retry attempt {}/{}",
+                        retry_count, MAX_RETRIES
+                    );
                     for _ in 0..100 {
                         if !self.running.load(Ordering::SeqCst) {
                             info!("Shutdown requested during retry wait");
@@ -239,10 +263,9 @@ impl FFmpegMonitor {
             debug!(?line, "Processing stdout line");
 
             if let Some(captures) = patterns.fps.captures(&line) {
-                let fps = captures[1]
-                    .parse::<f64>()
-                    .context("Failed to parse FPS value")?;
-                metrics.fps.set(fps);
+                if let Ok(fps) = captures[1].parse::<f64>() {
+                    metrics.fps.set(fps);
+                }
             }
             if let Some(captures) = patterns.frame.captures(&line) {
                 if let Ok(frames) = captures[1].parse::<f64>() {

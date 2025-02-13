@@ -1,6 +1,8 @@
 [package]
 name = "ffmpeg_exporter"
-version = "0.1.0"
+authors = ["Marco Cadetg <cadetg@gmail.com>"]
+description = "A Prometheus exporter for FFmpeg metrics"
+version = "1.0.0"
 edition = "2021"
 
 [dependencies]
@@ -15,3 +17,11 @@ anyhow = "1.0"
 ctrlc = "3.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Windows-specific dependencies
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = ["processenv", "consoleapi", "winbase", "errhandlingapi", "handleapi"] }
+
+[features]
+default = []
+windows = []

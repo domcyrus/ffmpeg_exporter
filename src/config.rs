@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
-use std::path::Path;
+use std::path::PathBuf;
 use url::Url;
 
 #[derive(Parser, Debug, Clone)]
@@ -19,7 +19,7 @@ pub struct Args {
     pub metrics_port: u16,
 
     /// ffmpeg cli path (optional)
-    #[arg(short, long, default_value = "ffmpeg")]
+    #[arg(short, long, default_value = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" })]
     pub ffmpeg_path: String,
 }
 
@@ -63,7 +63,7 @@ impl StreamType {
         }
 
         // Check if it's a file path
-        let path = Path::new(input);
+        let path = PathBuf::from(input);
         if path.exists() {
             return match path.extension().and_then(|ext| ext.to_str()) {
                 Some("ts") => Ok(StreamType::MpegTs(input.to_string())),

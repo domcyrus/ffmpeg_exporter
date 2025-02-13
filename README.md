@@ -16,21 +16,37 @@ A Prometheus exporter for FFmpeg streams that exposes detailed metrics about med
 
 ## Installation
 
+### Pre-built Binaries
+
+You can download pre-built binaries for Linux and Windows from the [releases page](https://github.com/domcyrus/ffmpeg_exporter/releases).
+
+For Windows users:
+
+1. Download the `ffmpeg_exporter-x86_64-pc-windows-gnu.tar.gz` file
+2. Extract the `ffmpeg_exporter.exe`
+3. Ensure FFmpeg is installed and available in your PATH or specify its location using `--ffmpeg-path`
+
+For Linux users:
+
+1. Download the `ffmpeg_exporter-x86_64-unknown-linux-gnu.tar.gz` file
+2. Extract the `ffmpeg_exporter` binary
+3. Make it executable: `chmod +x ffmpeg_exporter`
+
 ### Using Docker
 
 The easiest way to run FFmpeg Exporter is using Docker:
 
 ```bash
-# Build the image
-docker build -t ffmpeg_exporter .
+# Pull the image
+docker pull ghcr.io/domcyrus/ffmpeg_exporter:latest
 
 # Run the container
-docker run -p 9090:9090 ffmpeg_exporter --input <INPUT_URL>
+docker run -p 9090:9090 ghcr.io/domcyrus/ffmpeg_exporter --input <INPUT_URL>
 ```
 
 ### Manual Installation
 
-If you prefer to run without Docker, you'll need:
+If you prefer to build from source, you'll need:
 
 #### Prerequisites
 
@@ -43,6 +59,13 @@ If you prefer to run without Docker, you'll need:
 # Install FFmpeg and build dependencies
 apt-get update && apt-get install -y ffmpeg pkg-config
 ```
+
+##### Windows
+
+1. Install FFmpeg:
+   - Download from [FFmpeg official website](https://ffmpeg.org/download.html)
+   - Add FFmpeg to your system PATH or use `--ffmpeg-path`
+2. Install Visual Studio build tools or MinGW-w64
 
 ##### macOS
 
