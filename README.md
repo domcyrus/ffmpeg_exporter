@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/domcyrus/ffmpeg_exporter/actions/workflows/ci.yaml/badge.svg)](https://github.com/domcyrus/ffmpeg_exporter/actions/workflows/ci.yaml)
 
-A Prometheus exporter for FFmpeg streams that exposes detailed metrics about media streams. It supports various stream types including SRT, HLS, RTMP, RTSP, and more.
+A Prometheus exporter that uses FFprobe (part of the FFmpeg toolkit) to expose detailed metrics about media streams. It supports various stream types including SRT, HLS, RTMP, RTSP, and more.
 
 ## Features
 
@@ -10,8 +10,12 @@ A Prometheus exporter for FFmpeg streams that exposes detailed metrics about med
 - Prometheus metrics exposure
 - Automatic reconnection on stream failures
 - Support for multiple stream protocols
-- Detailed stream health metrics
-- Connection state monitoring
+- Detailed stream health metrics including:
+  - Per-stream FPS monitoring
+  - Bitrate tracking
+  - Packet corruption detection
+  - Codec error reporting
+  - Connection state monitoring
 - Structured logging with configurable levels
 
 ## Installation
@@ -24,7 +28,7 @@ For Windows users:
 
 1. Download the `ffmpeg_exporter-x86_64-pc-windows-gnu.tar.gz` file
 2. Extract the `ffmpeg_exporter.exe`
-3. Ensure FFmpeg is installed and available in your PATH or specify its location using `--ffmpeg-path`
+3. Ensure FFprobe is installed and available in your PATH or specify its location using `--ffprobe-path`
 
 For Linux users:
 
@@ -51,20 +55,20 @@ If you prefer to build from source, you'll need:
 #### Prerequisites
 
 - Rust 1.70 or higher (install via [rustup](https://rustup.rs/))
-- FFmpeg 4.4 or higher
+- FFprobe 4.4 or higher (part of FFmpeg)
 
 ##### Ubuntu/Debian
 
 ```bash
-# Install FFmpeg and build dependencies
+# Install FFmpeg (includes ffprobe) and build dependencies
 apt-get update && apt-get install -y ffmpeg pkg-config
 ```
 
 ##### Windows
 
-1. Install FFmpeg:
+1. Install FFmpeg (includes ffprobe):
    - Download from [FFmpeg official website](https://ffmpeg.org/download.html)
-   - Add FFmpeg to your system PATH or use `--ffmpeg-path`
+   - Add FFmpeg to your system PATH or use `--ffprobe-path`
 2. Install Visual Studio build tools or MinGW-w64
 
 ##### macOS
@@ -95,20 +99,37 @@ The built binary will be in `target/release/ffmpeg_exporter`
 Basic usage:
 
 ```bash
-ffmpeg_exporter --input <INPUT_URL> [--output <OUTPUT_FILE>] [--metrics-port <PORT>]
+ffmpeg_exporter --input <INPUT_URL> [OPTIONS]
 ```
 
-Examples:
+### Command Line Options
+
+```
+OPTIONS:
+    -i, --input <URL>                 Input stream URL/path to monitor
+    -m, --metrics-port <PORT>         Metrics port to expose Prometheus metrics [default: 9090]
+    -f, --ffprobe-path <PATH>        FFprobe executable path [default: ffprobe or ffprobe.exe on Windows]
+        --probe-size <BYTES>         Additional probe size in bytes [default: 2500]
+        --analyze-duration <MICROS>   Analysis duration in microseconds [default: 5000000]
+    -r, --report                      Enable reporting log [default: false]
+    -h, --help                        Print help information
+    -V, --version                     Print version information
+```
+
+### Examples
 
 ```bash
 # Monitor an SRT stream
 ffmpeg_exporter --input srt://server:9999
 
-# Monitor an HLS stream
-ffmpeg_exporter --input https://example.com/stream.m3u8
+# Monitor an HLS stream with custom probe size
+ffmpeg_exporter --input https://example.com/stream.m3u8 --probe-size 5000
 
-# Monitor with custom output and metrics port
-ffmpeg_exporter --input rtmp://server/live/stream --output output.ts --metrics-port 8080
+# Monitor with custom FFprobe path and metrics port
+ffmpeg_exporter --input rtmp://server/live/stream --ffprobe-path /usr/local/bin/ffprobe --metrics-port 8080
+
+# Enable detailed FFprobe reporting
+ffmpeg_exporter --input rtsp://camera:554/stream --report
 
 # Run with debug logging
 RUST_LOG=debug ffmpeg_exporter --input srt://server:9999
@@ -124,11 +145,60 @@ The tool automatically detects the stream type from the input URL:
 - RTSP (rtsp://)
 - MPEGTS (.ts)
 - UDP (udp://)
-- RDP (rdp:// or :3389)
+- File (local media files)
+
+## Metrics
+
+The exporter exposes Prometheus metrics on `http://localhost:9090/metrics` by default. Available metrics include:
+
+### Stream Processing Metrics
+
+- `ffmpeg_fps`: Current frames per second (gauge)
+  - Labels: `stream_type`, `stream_id`, `media_type`
+- `ffmpeg_frames`: Number of processed frames (gauge)
+  - Labels: `type`, `stream_id`, `media_type`
+- `ffmpeg_bitrate_kbits`: Current bitrate in kbits/s (gauge)
+  - Labels: `stream_id`, `media_type`
+
+### Error Metrics
+
+- `ffmpeg_packet_corrupt_total`: Total number of corrupt packets (counter)
+  - Labels: `stream_id`, `media_type`
+- `ffmpeg_codec_errors_total`: Total number of codec-specific errors (counter)
+  - Labels: `error_type`, `stream_id`
+- `ffmpeg_dropped_packets_total`: Total number of dropped packets (counter)
+  - Labels: `stream_type`
+
+### Connection Metrics
+
+- `ffmpeg_stream_connection_state`: Current connection state (gauge)
+  - `1` = connected
+  - `0` = disconnected
+  - Labels: `stream_type`
+- `ffmpeg_stream_connection_reset_total`: Total number of connection resets (counter)
+  - Labels: `stream_type`
+
+### Example Metrics Output
+
+```
+# HELP ffmpeg_bitrate_kbits Current bitrate in kbits/s
+# TYPE ffmpeg_bitrate_kbits gauge
+ffmpeg_bitrate_kbits{media_type="audio",stream_id="1"} 2.952
+ffmpeg_bitrate_kbits{media_type="video",stream_id="0"} 16.52
+
+# HELP ffmpeg_fps Current frames per second
+# TYPE ffmpeg_fps gauge
+ffmpeg_fps{media_type="audio",stream_id="1",stream_type="srt"} 3.668
+ffmpeg_fps{media_type="video",stream_id="0",stream_type="srt"} 17.372
+
+# HELP ffmpeg_stream_connection_state Current connection state
+# TYPE ffmpeg_stream_connection_state gauge
+ffmpeg_stream_connection_state{stream_type="srt"} 1
+```
 
 ## Logging
 
-The exporter uses structured logging via the `tracing` crate. All logs are written to stdout/stderr, following cloud-native best practices.
+The exporter uses structured logging via the `tracing` crate. All logs are written to stdout/stderr.
 
 ### Log Levels
 
@@ -140,153 +210,12 @@ The exporter uses structured logging via the `tracing` crate. All logs are writt
 
 ### Configuring Log Level
 
-The log level can be controlled via the `RUST_LOG` environment variable:
-
 ```bash
 # Set global log level
 RUST_LOG=debug ffmpeg_exporter --input srt://server:9999
 
 # Set different levels for different modules
 RUST_LOG=info,ffmpeg_monitor=debug ffmpeg_exporter --input srt://server:9999
-
-# Examples of component-specific logging
-RUST_LOG=ffmpeg_monitor=trace,tower_http=debug ffmpeg_exporter --input srt://server:9999
-```
-
-### Example Log Output
-
-```
-2024-02-12T15:23:45.123Z INFO  ffmpeg_monitor Starting FFmpeg monitor
-2024-02-12T15:23:45.124Z DEBUG ffmpeg_monitor Parsed arguments: Args { input: "srt://server:9999", output: "output.ts", metrics_port: 9090 }
-2024-02-12T15:23:45.125Z INFO  ffmpeg_monitor Initiating new FFmpeg process
-2024-02-12T15:23:46.127Z WARN  ffmpeg_monitor Corrupt packet detected in stream
-2024-02-12T15:23:47.130Z ERROR ffmpeg_monitor FFmpeg process failed: connection refused
-```
-
-## Metrics
-
-The tool exposes Prometheus metrics on `http://localhost:9090/metrics` by default. Here are the available metrics:
-
-### Stream Processing Metrics
-
-- `ffmpeg_fps`: Current frames per second (gauge)
-- `ffmpeg_frames`: Number of processed frames (gauge)
-- `ffmpeg_speed`: Current processing speed relative to realtime (gauge)
-- `ffmpeg_bitrate_kbits`: Current bitrate in kbits/s (gauge)
-
-### Error Metrics
-
-- `ffmpeg_decoding_errors_total`: Total number of decoding errors by frame type (counter)
-  - Labels: `frame_type` ("I", "P", "B", "general")
-- `ffmpeg_packet_corrupt_total`: Total number of corrupt packets (counter)
-  - Labels: `stream` (stream identifier)
-
-### Connection Metrics
-
-- `ffmpeg_stream_connection_state`: Current connection state (gauge)
-  - `1` = connected
-  - `0` = disconnected
-- `ffmpeg_stream_current_uptime_seconds`: Current uptime of the stream connection (gauge)
-- `ffmpeg_stream_reconnect_attempts_total`: Total number of reconnection attempts (counter)
-- `ffmpeg_stream_last_error`: Timestamp of the last error by type (gauge)
-  - Labels: `error_type`
-
-### Example Metrics Output
-
-```
-# HELP ffmpeg_bitrate_kbits Current bitrate in kbits/s
-# TYPE ffmpeg_bitrate_kbits gauge
-ffmpeg_bitrate_kbits 1026
-
-# HELP ffmpeg_decoding_errors_total Total number of decoding errors
-# TYPE ffmpeg_decoding_errors_total counter
-ffmpeg_decoding_errors_total{frame_type="B"} 95
-ffmpeg_decoding_errors_total{frame_type="I"} 21
-ffmpeg_decoding_errors_total{frame_type="P"} 109
-ffmpeg_decoding_errors_total{frame_type="general"} 167
-
-# HELP ffmpeg_fps Current frames per second
-# TYPE ffmpeg_fps gauge
-ffmpeg_fps 27.91
-
-# HELP ffmpeg_frames Number of frames processed by type
-# TYPE ffmpeg_frames gauge
-ffmpeg_frames{type="processed"} 420
-
-# HELP ffmpeg_speed Current processing speed (relative to realtime)
-# TYPE ffmpeg_speed gauge
-ffmpeg_speed 1.36
-
-# HELP ffmpeg_stream_connection_state Current connection state (1 = connected, 0 = disconnected)
-# TYPE ffmpeg_stream_connection_state gauge
-ffmpeg_stream_connection_state 1
-
-# HELP ffmpeg_stream_current_uptime_seconds Current uptime of the stream connection in seconds
-# TYPE ffmpeg_stream_current_uptime_seconds gauge
-ffmpeg_stream_current_uptime_seconds 76
-
-# HELP ffmpeg_stream_last_error Timestamp of the last error by type
-# TYPE ffmpeg_stream_last_error gauge
-ffmpeg_stream_last_error{error_type="connection_failed"} 1739278307
-
-# HELP ffmpeg_stream_reconnect_attempts_total Total number of stream reconnection attempts
-# TYPE ffmpeg_stream_reconnect_attempts_total counter
-ffmpeg_stream_reconnect_attempts_total 4
-```
-
-## Recommended Prometheus Queries
-
-Here are some useful PromQL queries for monitoring:
-
-```promql
-# Stream availability over time (as percentage)
-avg_over_time(ffmpeg_stream_connection_state[1h]) * 100
-
-# Connection stability (number of reconnects per hour)
-rate(ffmpeg_stream_reconnect_attempts_total[1h]) * 3600
-
-# Average bitrate over the last 5 minutes
-avg_over_time(ffmpeg_bitrate_kbits[5m])
-
-# Frame processing health
-rate(ffmpeg_frames{type="processed"}[1m])
-
-# Error rate by frame type
-rate(ffmpeg_decoding_errors_total[5m])
-```
-
-## Development
-
-### CI/CD Pipeline
-
-The project uses GitHub Actions for continuous integration and deployment:
-
-- **Automated Testing**: All PRs and pushes to main branch are automatically tested
-- **Code Quality**: Includes rustfmt and clippy checks
-- **Docker Images**: Automatically builds and publishes Docker images to GitHub Container Registry
-- **Releases**: Creates GitHub releases when tags are pushed
-
-The pipeline includes:
-
-1. Code formatting check (rustfmt)
-2. Linting (clippy)
-3. Running tests
-4. Building the project
-5. Building and publishing Docker images (on main branch)
-6. Creating releases (when tags are pushed)
-
-### Container Registry
-
-Docker images are automatically published to GitHub Container Registry. You can pull them using:
-
-```bash
-docker pull ghcr.io/domcyrus/ffmpeg_exporter:latest
-```
-
-Or use a specific version:
-
-```bash
-docker pull ghcr.io/domcyrus/ffmpeg_exporter:v1.0.0
 ```
 
 ## Contributing

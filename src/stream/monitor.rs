@@ -1,130 +1,127 @@
-use super::patterns::StreamPatterns;
 use crate::config::StreamType;
-use crate::metrics::{ConnectionMetrics, StderrMetrics, StdoutMetrics};
+use crate::metrics::StreamMetrics;
+use crate::stream::patterns::StreamPatterns;
 use anyhow::{Context, Result};
-use regex::Regex;
-use std::io::{self, BufRead};
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
-use tracing::{debug, error, info, instrument, trace, warn};
+use tracing::{debug, error, info, instrument, warn};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-pub struct FFmpegMonitor {
-    output: PathBuf,
+pub struct FFprobeMonitor {
+    ffprobe_path: String,
+    input: String,
     stream_type: StreamType,
-    ffmpeg_path: PathBuf,
+    metrics: StreamMetrics,
+    probe_size: u32,
+    analyze_duration: u32,
+    report: bool,
     running: Arc<AtomicBool>,
 }
 
-impl FFmpegMonitor {
-    pub fn new(input: String, output: String, ffmpeg_path: String) -> Result<Self> {
-        let stream_type = StreamType::from_input(&input)
-            .with_context(|| format!("Failed to determine stream type for input: {}", input))?;
-
-        let output_path = PathBuf::from(output);
-        // remove the output file if it exists
-        if output_path.exists() {
-            std::fs::remove_file(&output_path).context("Failed to remove existing output file")?;
-        }
-
-        let ffmpeg_executable = PathBuf::from(&ffmpeg_path);
-        // check if the ffmpeg binary exists
-        if ffmpeg_path != "ffmpeg" && ffmpeg_path != "ffmpeg.exe" && !ffmpeg_executable.exists() {
-            return Err(anyhow::anyhow!(
-                "ffmpeg binary not found at path: {}",
-                ffmpeg_path
-            ));
-        }
-
-        Ok(Self {
-            output: output_path,
+impl FFprobeMonitor {
+    pub fn new(
+        ffprobe_path: String,
+        input: String,
+        stream_type: StreamType,
+        metrics: StreamMetrics,
+        probe_size: u32,
+        analyze_duration: u32,
+        report: bool,
+    ) -> Self {
+        Self {
+            ffprobe_path,
+            input,
             stream_type,
-            ffmpeg_path: ffmpeg_executable,
+            metrics,
+            probe_size,
+            analyze_duration,
+            report,
             running: Arc::new(AtomicBool::new(true)),
-        })
+        }
     }
 
     pub fn get_running_handle(&self) -> Arc<AtomicBool> {
         self.running.clone()
     }
 
-    fn build_ffmpeg_command(&self) -> Command {
-        let mut ffmpeg = Command::new(&self.ffmpeg_path);
+    fn build_ffprobe_command(&self) -> Command {
+        let mut cmd = Command::new(&self.ffprobe_path);
 
         #[cfg(windows)]
         {
-            // Prevent opening a console window on Windows
-            ffmpeg.creation_flags(0x08000000); // CREATE_NO_WINDOW
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
         }
 
-        let input_args = self.stream_type.get_ffmpeg_input_args();
-        for arg in input_args {
-            ffmpeg.arg(arg);
-        }
+        // Use the stream-specific arguments from StreamType
+        let args =
+            self.stream_type
+                .get_ffprobe_args(self.probe_size, self.analyze_duration, self.report);
+        cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
 
-        ffmpeg
-            .arg("-stats")
-            .arg("-stats_period")
-            .arg("1")
-            .arg("-progress")
-            .arg("pipe:1")
-            .arg(&self.output)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        debug!("FFmpeg command: {:?}", ffmpeg);
-        ffmpeg
+        debug!("FFprobe command: {:?}", cmd);
+        cmd
     }
 
-    #[instrument(skip(self, stdout_metrics, stderr_metrics, connection_metrics))]
-    pub fn run(
-        &self,
-        stdout_metrics: StdoutMetrics,
-        stderr_metrics: StderrMetrics,
-        connection_metrics: ConnectionMetrics,
-    ) -> Result<()> {
-        info!("Starting FFmpeg monitoring");
+    #[instrument(skip(self))]
+    pub fn run(&self) -> Result<()> {
+        info!("Starting FFprobe monitoring for {}", self.input);
         const RETRY_DELAY: Duration = Duration::from_secs(10);
-        const MAX_RETRIES: u32 = 5; // Maximum number of retry attempts
-        let mut retry_count = 0;
 
         while self.running.load(Ordering::SeqCst) {
-            info!("Initiating new FFmpeg process");
-            let start_time = Instant::now();
-            connection_metrics.connection_state.set(1.0); // Connected
+            info!("Initiating new FFprobe process");
+            let _start_time = Instant::now();
+            self.metrics
+                .connection_state
+                .with_label_values(&[self.stream_type.get_type_str()])
+                .set(1.0);
 
-            match self.start_single_process(
-                stdout_metrics.clone(),
-                stderr_metrics.clone(),
-                connection_metrics.clone(),
-                start_time,
-            ) {
+            match self.run_single_monitor() {
                 Ok(()) => {
-                    connection_metrics.connection_state.set(0.0);
-                    break;
+                    // Process exited normally, continue monitoring
+                    info!("FFprobe process completed normally, restarting");
+                    self.metrics
+                        .connection_state
+                        .with_label_values(&[self.stream_type.get_type_str()])
+                        .set(0.0);
+                    self.metrics
+                        .connection_reset
+                        .with_label_values(&[self.stream_type.get_type_str()])
+                        .inc();
+
+                    // Wait before restarting
+                    warn!(
+                        "Waiting before restarting FFprobe process for {}",
+                        RETRY_DELAY.as_secs()
+                    );
+                    for _ in 0..100 {
+                        if !self.running.load(Ordering::SeqCst) {
+                            info!("Shutdown requested during restart wait");
+                            return Ok(());
+                        }
+                        thread::sleep(RETRY_DELAY / 100);
+                    }
                 }
                 Err(e) => {
-                    error!(?e, "FFmpeg process failed");
-                    connection_metrics.connection_state.set(0.0);
-                    connection_metrics.reconnect_attempts.inc();
-                    connection_metrics.record_error("connection_failed");
+                    error!(?e, "FFprobe process failed");
+                    self.metrics
+                        .connection_state
+                        .with_label_values(&[self.stream_type.get_type_str()])
+                        .set(0.0);
+                    self.metrics
+                        .connection_reset
+                        .with_label_values(&[self.stream_type.get_type_str()])
+                        .inc();
 
-                    retry_count += 1;
-                    if retry_count >= MAX_RETRIES {
-                        error!("Maximum retry attempts reached");
-                        return Err(anyhow::anyhow!("Maximum retry attempts reached"));
-                    }
-
-                    // Wait before retrying, but check running flag periodically
                     warn!(
-                        "Waiting before retry attempt {}/{}",
-                        retry_count, MAX_RETRIES
+                        "Waiting before retrying FFprobe process for {}",
+                        RETRY_DELAY.as_secs()
                     );
                     for _ in 0..100 {
                         if !self.running.load(Ordering::SeqCst) {
@@ -140,192 +137,248 @@ impl FFmpegMonitor {
         Ok(())
     }
 
-    #[instrument(skip(self, stdout_metrics, stderr_metrics, connection_metrics))]
-    fn start_single_process(
-        &self,
-        stdout_metrics: StdoutMetrics,
-        stderr_metrics: StderrMetrics,
-        connection_metrics: ConnectionMetrics,
-        start_time: Instant,
-    ) -> Result<()> {
-        debug!("Building FFmpeg command");
-        let mut ffmpeg = self
-            .build_ffmpeg_command()
-            .spawn()
-            .context("Failed to spawn ffmpeg process")?;
+    #[instrument(skip(self))]
+    fn run_single_monitor(&self) -> Result<()> {
+        let mut cmd = self.build_ffprobe_command();
+        let mut child = cmd.spawn().context("Failed to spawn ffprobe process")?;
 
-        info!("FFmpeg process spawned successfully");
-        let stdout = ffmpeg.stdout.take().context("Failed to capture stdout")?;
-        let stderr = ffmpeg.stderr.take().context("Failed to capture stderr")?;
+        let stdout = child.stdout.take().context("Failed to capture stdout")?;
+        let stderr = child.stderr.take().context("Failed to capture stderr")?;
 
-        let stdout_reader = io::BufReader::new(stdout);
-        let stderr_reader = io::BufReader::new(stderr);
+        let stdout_reader = BufReader::new(stdout);
+        let stderr_reader = BufReader::new(stderr);
 
-        let patterns = StreamPatterns::new();
-
-        // Create channels for error propagation
+        let patterns = StreamPatterns::new()?;
         let (error_tx, error_rx) = std::sync::mpsc::channel();
 
-        // Handle stdout in separate thread
+        // Spawn stderr processing thread
+        let stream_type = self.stream_type.clone();
+        let metrics = self.metrics.clone();
         let patterns_clone = patterns.clone();
-        let stdout_metrics_clone = stdout_metrics.clone();
         let error_tx_clone = error_tx.clone();
         let running = self.running.clone();
         thread::spawn(move || {
-            if let Err(e) =
-                Self::process_stdout(stdout_reader, patterns_clone, stdout_metrics_clone)
-            {
-                error!(?e, "Error processing stdout");
+            if let Err(e) = process_stderr(
+                stderr_reader,
+                &patterns_clone,
+                &metrics,
+                stream_type.get_type_str(),
+            ) {
+                error!(?e, "Error processing stderr");
                 let _ = error_tx_clone.send(e);
                 running.store(false, Ordering::SeqCst);
             }
         });
 
-        // Handle stderr in separate thread
+        // Process stdout in separate thread
+        let metrics = self.metrics.clone();
+        let stream_type = self.stream_type.clone();
         let error_tx_clone = error_tx.clone();
         let running_clone = self.running.clone();
         thread::spawn(move || {
-            if let Err(e) = Self::process_stderr(stderr_reader, stderr_metrics) {
-                error!(?e, "Error processing stderr");
+            if let Err(e) = process_stdout(stdout_reader, &metrics, &stream_type) {
+                error!(?e, "Error processing stdout");
                 let _ = error_tx_clone.send(e);
                 running_clone.store(false, Ordering::SeqCst);
             }
         });
 
-        // Start uptime tracking thread
-        let running_clone = self.running.clone();
-        let current_uptime = connection_metrics.current_uptime.clone();
-        thread::spawn(move || {
-            while running_clone.load(Ordering::SeqCst) {
-                let uptime = start_time.elapsed().as_secs() as f64;
-                current_uptime.set(uptime);
-                thread::sleep(Duration::from_secs(1));
-            }
-        });
-
         // Monitor the process and error channels
         loop {
-            // Check for errors from stdout/stderr processing
             match error_rx.try_recv() {
                 Ok(error) => {
-                    let _ = ffmpeg.kill();
+                    let _ = child.kill();
                     return Err(error);
                 }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    // No errors, continue checking
-                }
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    // All senders dropped, check process status
-                    break;
-                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
             }
 
-            // Check if the process is still running
-            match ffmpeg.try_wait() {
+            match child.try_wait() {
                 Ok(Some(status)) => {
                     if !status.success() {
                         let code = status.code().unwrap_or(-1);
                         return Err(anyhow::anyhow!(
-                            "FFmpeg process failed with exit code: {}",
+                            "FFprobe process failed with exit code: {}",
                             code
                         ));
                     }
                     break;
                 }
                 Ok(None) => {
-                    // Process still running, wait a bit before checking again
                     thread::sleep(Duration::from_millis(100));
                 }
                 Err(e) => {
-                    return Err(anyhow::anyhow!("Error waiting for FFmpeg process: {}", e));
+                    return Err(anyhow::anyhow!("Error waiting for FFprobe process: {}", e));
                 }
             }
 
-            // Check if we should stop
             if !self.running.load(Ordering::SeqCst) {
-                let _ = ffmpeg.kill();
+                let _ = child.kill();
                 break;
             }
         }
 
         Ok(())
     }
+}
 
-    #[instrument(skip(reader, patterns, metrics))]
-    fn process_stdout(
-        reader: impl BufRead,
-        patterns: StreamPatterns,
-        metrics: StdoutMetrics,
-    ) -> Result<()> {
-        debug!("Starting stdout processing");
-        for line in reader.lines() {
-            let line = line.context("Failed to read stdout line")?;
-            debug!(?line, "Processing stdout line");
+fn process_stderr(
+    reader: impl BufRead,
+    patterns: &StreamPatterns,
+    metrics: &StreamMetrics,
+    stream_type: &str,
+) -> Result<()> {
+    for line in reader.lines() {
+        let line = line.context("Failed to read stderr line")?;
+        debug!("FFprobe stderr: {}", line);
 
-            if let Some(captures) = patterns.fps.captures(&line) {
-                if let Ok(fps) = captures[1].parse::<f64>() {
-                    metrics.fps.set(fps);
-                }
-            }
-            if let Some(captures) = patterns.frame.captures(&line) {
-                if let Ok(frames) = captures[1].parse::<f64>() {
-                    metrics
-                        .frame_counter
-                        .with_label_values(&["processed"])
-                        .set(frames);
-                }
-            }
-            if let Some(captures) = patterns.speed.captures(&line) {
-                if let Ok(speed) = captures[1].parse::<f64>() {
-                    metrics.speed.set(speed);
-                }
-            }
-            if let Some(captures) = patterns.bitrate.captures(&line) {
-                if let Ok(bitrate) = captures[1].parse::<f64>() {
-                    metrics.bitrate.set(bitrate);
-                }
+        // Check for SRT dropped packets
+        if let Some(caps) = patterns.srt_dropped.captures(&line) {
+            if let Some(count) = caps.get(1).and_then(|m| m.as_str().parse::<f64>().ok()) {
+                metrics
+                    .dropped_packets
+                    .with_label_values(&[stream_type])
+                    .inc_by(count);
             }
         }
-        Ok(())
-    }
 
-    #[instrument(skip(reader, metrics))]
-    fn process_stderr(reader: impl BufRead, metrics: StderrMetrics) -> Result<()> {
-        debug!("Starting stderr processing");
-        let frame_error_regex = Regex::new(r"concealing.*in (I|P|B) frame")
-            .context("Failed to compile frame error regex")?;
-
-        for line in reader.lines() {
-            let line = line.context("Failed to read stderr line")?;
-            if !line.contains("error") && !line.contains("corrupt") {
-                trace!(?line, "FFmpeg stderr output");
-            }
-
-            if let Some(stream_id) = line.find("corrupt packet") {
-                warn!(?line, "Corrupt packet detected in stream");
+        // Check for corrupt packets
+        if let Some(caps) = patterns.packet_corrupt.captures(&line) {
+            if let Some(stream_id) = caps.get(1) {
+                let stream_id = stream_id.as_str();
                 metrics
                     .packet_corrupt
-                    .with_label_values(&[&stream_id.to_string()])
-                    .inc();
-            }
-
-            if line.contains("error while decoding") {
-                error!(?line, "Decoding error detected");
-                metrics
-                    .decoding_errors
-                    .with_label_values(&["general"])
-                    .inc();
-            }
-
-            if let Some(captures) = frame_error_regex.captures(&line) {
-                error!(?line, "Decoding error detected");
-                let frame_type = captures.get(1).map_or("unknown", |m| m.as_str());
-                metrics
-                    .decoding_errors
-                    .with_label_values(&[frame_type])
+                    .with_label_values(&[stream_id, "unknown"])
                     .inc();
             }
         }
-        Ok(())
+
+        // Check for codec-specific errors
+        if let Some(caps) = patterns.codec_error.captures(&line) {
+            let error_type = match caps.get(2).map(|m| m.as_str()) {
+                Some(msg) if msg.contains("SEI") => "sei_error",
+                Some(msg) if msg.contains("PPS") => "pps_error",
+                Some(msg) if msg.contains("decode_slice_header") => "slice_header_error",
+                Some(msg) if msg.contains("no frame") => "missing_frame",
+                _ => "other",
+            };
+            metrics
+                .codec_errors
+                .with_label_values(&[error_type, "0"])
+                .inc();
+        }
     }
+    Ok(())
+}
+
+fn process_stdout(
+    reader: impl BufRead,
+    metrics: &StreamMetrics,
+    stream_type: &StreamType,
+) -> Result<()> {
+    let mut frame_times: Vec<(String, f64)> = Vec::new();
+    let mut last_fps_update = Instant::now();
+
+    for line in reader.lines() {
+        let line = line.context("Failed to read stdout line")?;
+        debug!("FFprobe stdout: {:?}", line);
+        let parts: Vec<&str> = line.split(',').collect();
+
+        if parts.len() < 3 {
+            continue;
+        }
+
+        match parts[0] {
+            "packet" => process_packet_line(&parts, metrics)?,
+            "frame" => process_frame_line(
+                &parts,
+                metrics,
+                stream_type,
+                &mut frame_times,
+                &mut last_fps_update,
+            )?,
+            _ => continue,
+        }
+    }
+
+    Ok(())
+}
+
+fn process_packet_line(parts: &[&str], metrics: &StreamMetrics) -> Result<()> {
+    if parts.len() >= 12 {
+        let media_type = parts[1];
+        let stream_id = parts[2];
+
+        if let Ok(size) = parts[9].parse::<f64>() {
+            metrics
+                .bitrate
+                .with_label_values(&[stream_id, media_type])
+                .set(size * 8.0 / 1000.0);
+        }
+
+        // Check flags for corruption
+        if parts.len() >= 11 && parts[11].contains('C') {
+            metrics
+                .packet_corrupt
+                .with_label_values(&[stream_id, media_type])
+                .inc();
+        }
+    }
+    Ok(())
+}
+
+fn process_frame_line(
+    parts: &[&str],
+    metrics: &StreamMetrics,
+    stream_type: &StreamType,
+    frame_times: &mut Vec<(String, f64)>,
+    last_fps_update: &mut Instant,
+) -> Result<()> {
+    if parts.len() >= 6 {
+        let media_type = parts[1];
+        let stream_id = parts[2];
+
+        metrics
+            .frame_counter
+            .with_label_values(&["processed", stream_id, media_type])
+            .inc();
+
+        if let Ok(pts_time) = parts[5].parse::<f64>() {
+            frame_times.push((format!("{}_{}", stream_id, media_type), pts_time));
+
+            // Keep only last 100 frames per stream
+            while frame_times.len() > 100 {
+                frame_times.remove(0);
+            }
+
+            // Update FPS every second
+            if last_fps_update.elapsed().as_secs() >= 1 {
+                // Group frames by stream_id and media_type
+                let mut stream_frames: HashMap<String, Vec<f64>> = HashMap::new();
+
+                for (key, time) in frame_times.iter() {
+                    stream_frames.entry(key.clone()).or_default().push(*time);
+                }
+
+                // Calculate FPS for each stream
+                for (key, times) in stream_frames {
+                    if times.len() >= 2 {
+                        let time_diff = times.last().unwrap() - times.first().unwrap();
+                        let fps = times.len() as f64 / time_diff;
+
+                        let (stream_id, media_type) =
+                            key.split_once('_').unwrap_or(("0", "unknown"));
+
+                        metrics
+                            .fps
+                            .with_label_values(&[stream_type.get_type_str(), stream_id, media_type])
+                            .set(fps);
+                    }
+                }
+                *last_fps_update = Instant::now();
+            }
+        }
+    }
+    Ok(())
 }

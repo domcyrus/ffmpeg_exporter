@@ -1,20 +1,21 @@
+// stream/patterns.rs
+
+use anyhow::Result;
 use regex::Regex;
 
 #[derive(Clone)]
 pub struct StreamPatterns {
-    pub fps: Regex,
-    pub frame: Regex,
-    pub speed: Regex,
-    pub bitrate: Regex,
+    pub packet_corrupt: Regex,
+    pub srt_dropped: Regex,
+    pub codec_error: Regex,
 }
 
 impl StreamPatterns {
-    pub fn new() -> Self {
-        Self {
-            fps: Regex::new(r"fps=\s*(\d+\.?\d*)").unwrap(),
-            frame: Regex::new(r"frame=\s*(\d+)").unwrap(),
-            speed: Regex::new(r"speed=\s*(\d+\.?\d*)x").unwrap(),
-            bitrate: Regex::new(r"bitrate=\s*(\d+\.?\d*)kbits/s").unwrap(),
-        }
+    pub fn new() -> Result<Self> {
+        Ok(Self {
+            packet_corrupt: Regex::new(r"Packet corrupt \(stream = (\d+), dts = (\d+)\)")?,
+            srt_dropped: Regex::new(r"RCV-DROPPED (\d+) packet")?,
+            codec_error: Regex::new(r"\[(h264|hevc|vp8|vp9|av1).*?\] (.*?)(?:\n|$)")?,
+        })
     }
 }

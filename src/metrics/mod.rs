@@ -2,4 +2,4 @@ mod app_state;
 mod collectors;
 
 pub use app_state::AppState;
-pub use collectors::{ConnectionMetrics, StderrMetrics, StdoutMetrics};
+pub use collectors::StreamMetrics;

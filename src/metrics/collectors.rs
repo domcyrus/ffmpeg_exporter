@@ -1,139 +1,94 @@
-use prometheus::{Counter, CounterVec, Gauge, GaugeVec, Opts, Registry};
-use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::{debug, error, info};
+use anyhow::Result;
+use prometheus::{CounterVec, GaugeVec, Opts, Registry};
 
 #[derive(Clone)]
-pub struct StdoutMetrics {
-    pub fps: Gauge,
+pub struct StreamMetrics {
+    pub fps: GaugeVec,
     pub frame_counter: GaugeVec,
-    pub speed: Gauge,
-    pub bitrate: Gauge,
-}
-
-impl StdoutMetrics {
-    pub fn new(registry: &Registry) -> Result<Self, prometheus::Error> {
-        debug!("Initializing stdout metrics");
-
-        let fps_gauge = Gauge::new("ffmpeg_fps", "Current frames per second")?;
-        let frame_counter = GaugeVec::new(
-            Opts::new("ffmpeg_frames", "Number of frames processed by type"),
-            &["type"],
-        )?;
-        let speed_gauge = Gauge::new(
-            "ffmpeg_speed",
-            "Current processing speed (relative to realtime)",
-        )?;
-        let bitrate_gauge = Gauge::new("ffmpeg_bitrate_kbits", "Current bitrate in kbits/s")?;
-
-        // Register metrics
-        registry.register(Box::new(fps_gauge.clone()))?;
-        registry.register(Box::new(frame_counter.clone()))?;
-        registry.register(Box::new(speed_gauge.clone()))?;
-        registry.register(Box::new(bitrate_gauge.clone()))?;
-
-        Ok(Self {
-            fps: fps_gauge,
-            frame_counter,
-            speed: speed_gauge,
-            bitrate: bitrate_gauge,
-        })
-    }
-}
-
-#[derive(Clone)]
-pub struct StderrMetrics {
+    pub bitrate: GaugeVec,
     pub packet_corrupt: CounterVec,
-    pub decoding_errors: CounterVec,
+    pub connection_state: GaugeVec,
+    pub connection_reset: CounterVec,
+    pub dropped_packets: CounterVec,
+    pub codec_errors: CounterVec,
 }
 
-impl StderrMetrics {
-    pub fn new(registry: &Registry) -> Result<Self, prometheus::Error> {
-        debug!("Initializing stderr metrics");
+impl StreamMetrics {
+    pub fn new(registry: &Registry) -> Result<Self> {
+        let fps = GaugeVec::new(
+            Opts::new("ffmpeg_fps", "Current frames per second"),
+            &["stream_type", "stream_id", "media_type"],
+        )?;
+
+        let frame_counter = GaugeVec::new(
+            Opts::new("ffmpeg_frames", "Number of frames processed"),
+            &["type", "stream_id", "media_type"],
+        )?;
+
+        let bitrate = GaugeVec::new(
+            Opts::new("ffmpeg_bitrate_kbits", "Current bitrate in kbits/s"),
+            &["stream_id", "media_type"],
+        )?;
+
         let packet_corrupt = CounterVec::new(
             Opts::new(
                 "ffmpeg_packet_corrupt_total",
                 "Total number of corrupt packets",
             ),
-            &["stream"],
+            &["stream_id", "media_type"],
         )?;
 
-        let decoding_errors = CounterVec::new(
+        let connection_state = GaugeVec::new(
             Opts::new(
-                "ffmpeg_decoding_errors_total",
-                "Total number of decoding errors",
+                "ffmpeg_stream_connection_state",
+                "Current connection state (1 = connected, 0 = disconnected)",
             ),
-            &["frame_type"],
+            &["stream_type"],
         )?;
 
-        // Register metrics
+        let connection_reset = CounterVec::new(
+            Opts::new(
+                "ffmpeg_stream_connection_reset_total",
+                "Total number of connection resets",
+            ),
+            &["stream_type"],
+        )?;
+
+        let dropped_packets = CounterVec::new(
+            Opts::new(
+                "ffmpeg_dropped_packets_total",
+                "Total number of dropped packets",
+            ),
+            &["stream_type"],
+        )?;
+
+        let codec_errors = CounterVec::new(
+            Opts::new(
+                "ffmpeg_codec_errors_total",
+                "Total number of codec-specific errors",
+            ),
+            &["error_type", "stream_id"],
+        )?;
+
+        // Register all metrics
+        registry.register(Box::new(fps.clone()))?;
+        registry.register(Box::new(frame_counter.clone()))?;
+        registry.register(Box::new(bitrate.clone()))?;
         registry.register(Box::new(packet_corrupt.clone()))?;
-        registry.register(Box::new(decoding_errors.clone()))?;
-
-        Ok(Self {
-            packet_corrupt,
-            decoding_errors,
-        })
-    }
-}
-
-#[derive(Clone)]
-pub struct ConnectionMetrics {
-    pub reconnect_attempts: Counter,
-    pub connection_state: Gauge,
-    pub current_uptime: Gauge,
-    pub last_error: GaugeVec,
-}
-
-impl ConnectionMetrics {
-    pub fn new(registry: &Registry) -> Result<Self, prometheus::Error> {
-        debug!("Initializing connection metrics");
-
-        let reconnect_attempts = Counter::new(
-            "ffmpeg_stream_reconnect_attempts_total",
-            "Total number of stream reconnection attempts",
-        )?;
-
-        let connection_state = Gauge::new(
-            "ffmpeg_stream_connection_state",
-            "Current connection state (1 = connected, 0 = disconnected)",
-        )?;
-
-        let current_uptime = Gauge::new(
-            "ffmpeg_stream_current_uptime_seconds",
-            "Current uptime of the stream connection in seconds",
-        )?;
-
-        let last_error = GaugeVec::new(
-            Opts::new(
-                "ffmpeg_stream_last_error",
-                "Timestamp of the last error by type",
-            ),
-            &["error_type"],
-        )?;
-
-        // Register metrics
-        registry.register(Box::new(reconnect_attempts.clone()))?;
         registry.register(Box::new(connection_state.clone()))?;
-        registry.register(Box::new(current_uptime.clone()))?;
-        registry.register(Box::new(last_error.clone()))?;
-
-        info!("Connection metrics initialized successfully");
+        registry.register(Box::new(connection_reset.clone()))?;
+        registry.register(Box::new(dropped_packets.clone()))?;
+        registry.register(Box::new(codec_errors.clone()))?;
 
         Ok(Self {
-            reconnect_attempts,
+            fps,
+            frame_counter,
+            bitrate,
+            packet_corrupt,
             connection_state,
-            current_uptime,
-            last_error,
+            connection_reset,
+            dropped_packets,
+            codec_errors,
         })
-    }
-
-    pub fn record_error(&self, error_type: &str) {
-        error!(error_type, "Stream error occurred");
-        self.last_error.with_label_values(&[error_type]).set(
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs() as f64,
-        );
     }
 }

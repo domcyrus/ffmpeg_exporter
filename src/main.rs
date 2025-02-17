@@ -1,39 +1,52 @@
+use anyhow::{Context, Result};
+use clap::Parser;
+
 mod config;
 mod logging;
 mod metrics;
 mod server;
 mod stream;
 
-use anyhow::{Context, Result};
-use clap::Parser;
-use config::Args;
-use metrics::{AppState, ConnectionMetrics, StderrMetrics, StdoutMetrics};
+use crate::config::{Args, StreamType};
+use crate::metrics::{AppState, StreamMetrics};
+use crate::stream::FFprobeMonitor;
 use std::sync::atomic::Ordering;
-use stream::FFmpegMonitor;
 use tokio::task;
 use tracing::{debug, error, info};
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Parse command line arguments
     let args = Args::parse();
     logging::init_logging()?;
-    info!("Starting FFmpeg monitor");
+    info!("Starting FFprobe monitor");
     debug!("Parsed arguments: {:?}", args);
 
+    // Create app state and metrics
     let (app_state, registry) = AppState::new();
+    let metrics = StreamMetrics::new(&registry)?;
 
-    let stdout_metrics = StdoutMetrics::new(&registry)?;
-    let stderr_metrics = StderrMetrics::new(&registry)?;
-    let connection_metrics = ConnectionMetrics::new(&registry)?;
+    // Determine stream type
+    let stream_type =
+        StreamType::from_input(&args.input).context("Failed to determine stream type")?;
 
+    // Start HTTP server in background
     let metrics_server = {
         let state = app_state.clone();
         let port = args.metrics_port;
         task::spawn(async move { server::run_server(state, port).await })
     };
 
-    let monitor = FFmpegMonitor::new(args.input, args.output, args.ffmpeg_path)
-        .context("Failed to initialize FFmpeg monitor")?;
+    // Create monitor
+    let monitor = FFprobeMonitor::new(
+        args.ffprobe_path,
+        args.input,
+        stream_type,
+        metrics,
+        args.probe_size,
+        args.analyze_duration,
+        args.report,
+    );
 
     // Set up Ctrl+C handler
     let running = monitor.get_running_handle();
@@ -42,12 +55,9 @@ async fn main() -> Result<()> {
         running.store(false, Ordering::SeqCst);
     })?;
 
-    // Start FFmpeg monitoring in a separate blocking task
-    let ffmpeg_task = task::spawn_blocking(move || {
-        monitor
-            .run(stdout_metrics, stderr_metrics, connection_metrics)
-            .context("Failed to run FFmpeg monitor")
-    });
+    // Start FFprobe monitoring in a separate blocking task
+    let ffprobe_task =
+        task::spawn_blocking(move || monitor.run().context("Failed to run FFprobe monitor"));
 
     // Wait for either task to complete
     tokio::select! {
@@ -57,17 +67,17 @@ async fn main() -> Result<()> {
                 std::process::exit(1);
             }
         }
-        result = ffmpeg_task => {
+        result = ffprobe_task => {
             match result {
                 Ok(Ok(())) => {
-                    info!("FFmpeg monitor shut down gracefully");
+                    info!("FFprobe monitor shut down gracefully");
                 }
                 Ok(Err(e)) => {
-                    error!("FFmpeg monitoring error: {:#}", e);
+                    error!("FFprobe monitoring error: {:#}", e);
                     std::process::exit(1);
                 }
                 Err(e) => {
-                    error!("FFmpeg task panicked: {}", e);
+                    error!("FFprobe task panicked: {}", e);
                     std::process::exit(1);
                 }
             }
