@@ -1,5 +1,5 @@
 use crate::metrics::AppState;
-use axum::{extract::State, routing::get, Router};
+use axum::{Router, extract::State, routing::get};
 use prometheus::{Encoder, TextEncoder};
 use std::net::SocketAddr;
 use tokio::net::TcpListener;

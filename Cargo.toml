@@ -3,7 +3,7 @@ name = "ffmpeg_exporter"
 authors = ["Marco Cadetg <cadetg@gmail.com>"]
 description = "A Prometheus exporter for FFmpeg metrics"
 version = "1.0.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 prometheus = "0.13"

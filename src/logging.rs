@@ -1,5 +1,5 @@
 use anyhow::Result;
-use tracing_subscriber::{fmt::format::FmtSpan, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan};
 
 pub fn init_logging() -> Result<()> {
     // Create a default env filter that can be overridden by RUST_LOG

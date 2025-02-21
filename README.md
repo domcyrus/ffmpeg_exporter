@@ -54,7 +54,7 @@ If you prefer to build from source, you'll need:
 
 #### Prerequisites
 
-- Rust 1.70 or higher (install via [rustup](https://rustup.rs/))
+- Rust 2024 edition (install via [rustup](https://rustup.rs/))
 - FFprobe 4.4 or higher (part of FFmpeg)
 
 ##### Ubuntu/Debian
